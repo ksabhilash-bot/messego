@@ -1,0 +1,59 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
+  
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User{
+  id Int @id @default(autoincrement())
+  email String @unique
+  name String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  sentMessage Message[] @relation("MessageFromUser")
+  receivedMessage Message[] @relation("MessageToUser")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+}
+
+model Message {
+  id        Int         @id @default(autoincrement())
+  text      String?     // Optional for image messages
+  type      MessageType @default(TEXT)
+  imageUrl  String?     // For image messages
+  createdAt DateTime    @default(now())
+  
+  // Message status
+  isRead    Boolean     @default(false)
+  readAt    DateTime?
+  
+  // Soft delete
+  deletedAt DateTime?
+
+  // Sender
+  fromId    Int
+  from      User        @relation("MessageFromUser", fields: [fromId], references: [id], onDelete: Cascade)
+
+  // Receiver
+  toId      Int
+  to        User        @relation("MessageToUser", fields: [toId], references: [id], onDelete: Cascade)
+
+  // Indexes for performance
+  @@index([fromId, toId, deletedAt])
+  @@index([toId, isRead])
+  @@index([createdAt])
+}

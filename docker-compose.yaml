@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: messego-postgres-1
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: messegodb
+      POSTGRES_INITDB_ARGS: "--auth-host=md5 --auth-local=md5" # Enforce md5 auth
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d messegodb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
