@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { withAuth, getUser } from "@/lib/auth";
 import { PrismaClient } from "../../../generated/prisma";
+import cloudinary from "@/lib/cloudinary";
 
 const prisma = new PrismaClient();
 
@@ -10,7 +11,7 @@ export const POST = withAuth(async function (request) {
   try {
     const user = getUser(request);
     const body = await request.json();
-    const { toId, text, type = "TEXT", imageUrl } = body;
+    const { toId, text, type = "TEXT", imageFile } = body;
 
     // Validation
     if (!toId) {
@@ -28,9 +29,12 @@ export const POST = withAuth(async function (request) {
       );
     }
 
-    if (type === "IMAGE" && !imageUrl) {
+    if (type === "IMAGE" && !imageFile) {
       return NextResponse.json(
-        { success: false, message: "Image URL is required for image messages" },
+        {
+          success: false,
+          message: "Image file is required for image messages",
+        },
         { status: 400 }
       );
     }
@@ -55,6 +59,31 @@ export const POST = withAuth(async function (request) {
       );
     }
 
+    let imageSecureUrl = null;
+    let imagePublicId = null;
+
+    // Handle image upload to Cloudinary
+    if (type === "IMAGE" && imageFile) {
+      try {
+        // Upload image to Cloudinary
+        const uploadResult = await cloudinary.uploader.upload(imageFile, {
+          folder: "chat-messages", // Organize images in a folder
+          resource_type: "image",
+          quality: "auto:good", // Optimize quality
+          fetch_format: "auto", // Auto format optimization
+        });
+
+        imageSecureUrl = uploadResult.secure_url;
+        imagePublicId = uploadResult.public_id;
+      } catch (cloudinaryError) {
+        console.error("Cloudinary upload error:", cloudinaryError);
+        return NextResponse.json(
+          { success: false, message: "Failed to upload image" },
+          { status: 500 }
+        );
+      }
+    }
+
     // Create message
     const message = await prisma.message.create({
       data: {
@@ -62,7 +91,8 @@ export const POST = withAuth(async function (request) {
         toId: parseInt(toId),
         text: type === "TEXT" ? text : null,
         type: type,
-        imageUrl: type === "IMAGE" ? imageUrl : null,
+        imageSecureUrl: imageSecureUrl,
+        imagePublicId: imagePublicId,
       },
       include: {
         from: {

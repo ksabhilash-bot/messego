@@ -4,21 +4,31 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Search,
   Send,
-  MoreVertical,
   Trash2,
   Image,
   User,
-  Phone,
-  Video,
   ArrowLeft,
   LogOut,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { Loader } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 const MessagingPage = () => {
   const router = useRouter();
 
   // State management
+  const [messageToDelete, setMessageToDelete] = useState(null);
   const [contacts, setContacts] = useState([]);
   const [messages, setMessages] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -26,11 +36,12 @@ const MessagingPage = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [isMobile, setIsMobile] = useState(false);
   const [showMobileChat, setShowMobileChat] = useState(false);
-  const [isLoggingOut, setIsLoggingOut] = useState(false); // Fixed variable name
-
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [deletingMessageId, setDeletingMessageId] = useState(null);
   // Refs
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -204,8 +215,18 @@ const MessagingPage = () => {
     }
   };
 
+  // Convert file to base64
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = (error) => reject(error);
+    });
+  };
+
   // Send message
-  const sendMessage = async (type = "TEXT", content = null) => {
+  const sendMessage = async (type = "TEXT", imageFile = null) => {
     if (
       (!newMessage.trim() && type === "TEXT") ||
       !selectedUser ||
@@ -215,16 +236,24 @@ const MessagingPage = () => {
 
     setSendingMessage(true);
     try {
+      const messageData = {
+        toId: selectedUser.id,
+        type: type,
+      };
+
+      if (type === "TEXT") {
+        messageData.text = newMessage.trim();
+      } else if (type === "IMAGE" && imageFile) {
+        // Convert file to base64 for sending to API
+        const base64Image = await fileToBase64(imageFile);
+        messageData.imageFile = base64Image;
+      }
+
       const response = await fetch("/api/messages/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({
-          toId: selectedUser.id,
-          text: type === "TEXT" ? newMessage.trim() : null,
-          type: type,
-          imageUrl: type === "IMAGE" ? content : null,
-        }),
+        body: JSON.stringify(messageData),
       });
 
       if (!response.ok) {
@@ -253,38 +282,43 @@ const MessagingPage = () => {
   };
 
   // Handle image upload
-  const handleImageUpload = (event) => {
+  const handleImageUpload = async (event) => {
     const file = event.target.files?.[0];
-    if (file) {
-      // Validate file size (max 5MB)
-      if (file.size > 5 * 1024 * 1024) {
-        toast.error("Image size must be less than 5MB");
-        return;
-      }
+    if (!file) return;
 
-      // Validate file type
-      if (!file.type.startsWith("image/")) {
-        toast.error("Please select a valid image file");
-        return;
-      }
-
-      // In a real app, you'd upload to cloud storage first
-      // For now, we'll create a temporary URL
-      const imageUrl = URL.createObjectURL(file);
-      sendMessage("IMAGE", imageUrl);
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image size must be less than 5MB");
+      return;
     }
 
-    // Clear file input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+    // Validate file type
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select a valid image file");
+      return;
+    }
+
+    setUploadingImage(true);
+    try {
+      // Send the file directly to the message API
+      await sendMessage("IMAGE", file);
+
+      toast.success("Image uploaded and sent!");
+    } catch (error) {
+      toast.error(error.message || "Failed to upload image");
+      console.error("Image upload error:", error);
+    } finally {
+      setUploadingImage(false);
+      // Clear file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
   };
 
   // Delete message
   const deleteMessage = async (messageId) => {
-    if (!window.confirm("Are you sure you want to delete this message?")) {
-      return;
-    }
+    setDeletingMessageId(messageId);
 
     try {
       const response = await fetch(
@@ -309,6 +343,8 @@ const MessagingPage = () => {
     } catch (error) {
       toast.error(error.message || "Failed to delete message");
       console.error("Delete message error:", error);
+    } finally {
+      setDeletingMessageId(null); // 👈 Add this
     }
   };
 
@@ -487,7 +523,7 @@ const MessagingPage = () => {
                           <p className="text-sm">{message.text}</p>
                         ) : (
                           <img
-                            src={message.imageUrl}
+                            src={message.imageSecureUrl}
                             alt="Shared image"
                             className="rounded max-w-full h-auto"
                             onError={(e) => {
@@ -506,13 +542,53 @@ const MessagingPage = () => {
 
                         {/* Delete button (only for own messages) */}
                         {isOwnMessage && (
-                          <button
-                            onClick={() => deleteMessage(message.id)}
-                            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                            title="Delete message"
+                          <AlertDialog
+                            open={messageToDelete?.id === message.id}
+                            onOpenChange={(open) => {
+                              if (!open) setMessageToDelete(null);
+                            }}
                           >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
+                            <AlertDialogTrigger asChild>
+                              <button
+                                onClick={() => setMessageToDelete(message)}
+                                className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Delete message"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>
+                                  Are you sure?
+                                </AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  This action cannot be undone. This will
+                                  permanently delete the message.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => {
+                                    deleteMessage(message.id);
+                                    setMessageToDelete(null);
+                                  }}
+                                  disabled={deletingMessageId === message.id}
+                                  className="bg-red-600 hover:bg-red-700"
+                                >
+                                  {deletingMessageId === message.id ? (
+                                    <>
+                                      <Loader className="mr-2 h-4 w-4 animate-spin" />
+                                      Deleting...
+                                    </>
+                                  ) : (
+                                    "Delete"
+                                  )}
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
                         )}
                       </div>
                     </div>
@@ -534,31 +610,50 @@ const MessagingPage = () => {
                 />
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-full"
+                  disabled={uploadingImage || sendingMessage}
+                  className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
                   title="Upload image"
                 >
-                  <Image className="h-5 w-5" />
+                  {uploadingImage ? (
+                    <Loader className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <Image className="h-5 w-5" />
+                  )}
                 </button>
                 <input
                   type="text"
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyPress={(e) =>
+                  onKeyUp={(e) =>
                     e.key === "Enter" && !e.shiftKey && sendMessage()
                   }
                   placeholder="Type a message..."
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                  disabled={sendingMessage}
+                  disabled={sendingMessage || uploadingImage}
                 />
                 <button
                   onClick={() => sendMessage()}
-                  disabled={!newMessage.trim() || sendingMessage}
+                  disabled={
+                    !newMessage.trim() || sendingMessage || uploadingImage
+                  }
                   className="p-2 bg-purple-600 text-white rounded-full hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   title="Send message"
                 >
-                  <Send className="h-5 w-5" />
+                  {sendingMessage ? (
+                    <Loader className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <Send className="h-5 w-5" />
+                  )}
                 </button>
               </div>
+
+              {/* Upload status */}
+              {uploadingImage && (
+                <div className="mt-2 text-sm text-gray-500 flex items-center">
+                  <Loader className="h-4 w-4 animate-spin mr-1" />
+                  Uploading image...
+                </div>
+              )}
             </div>
           </>
         ) : (

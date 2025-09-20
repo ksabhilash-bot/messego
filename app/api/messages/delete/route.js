@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { withAuth, getUser } from "@/lib/auth";
 import { PrismaClient } from "../../../generated/prisma";
+import  cloudinary  from "@/lib/cloudinary";
 
 const prisma = new PrismaClient();
 
@@ -40,6 +41,18 @@ export const DELETE = withAuth(async function (request) {
         { success: false, message: "You can only delete your own messages" },
         { status: 403 }
       );
+    }
+
+    // Delete image from Cloudinary if it's an image message
+    if (message.type === "IMAGE" && message.imagePublicId) {
+      try {
+        await cloudinary.uploader.destroy(message.imagePublicId);
+        console.log(`Deleted image from Cloudinary: ${message.imagePublicId}`);
+      } catch (cloudinaryError) {
+        console.error("Cloudinary deletion error:", cloudinaryError);
+        // Don't fail the whole operation if Cloudinary deletion fails
+        // The message will still be deleted from database
+      }
     }
 
     // Soft delete - set deletedAt timestamp
@@ -86,12 +99,17 @@ export const POST = withAuth(async function (request) {
       );
     }
 
-    // Verify all messages belong to the user
+    // Verify all messages belong to the user and get image data
     const messages = await prisma.message.findMany({
       where: {
         id: { in: messageIds.map((id) => parseInt(id)) },
         fromId: user.userId,
         deletedAt: null,
+      },
+      select: {
+        id: true,
+        type: true,
+        imagePublicId: true,
       },
     });
 
@@ -103,6 +121,23 @@ export const POST = withAuth(async function (request) {
         },
         { status: 403 }
       );
+    }
+
+    // Delete images from Cloudinary for image messages
+    const imageMessages = messages.filter(
+      (msg) => msg.type === "IMAGE" && msg.imagePublicId
+    );
+
+    if (imageMessages.length > 0) {
+      try {
+        // Bulk delete images from Cloudinary
+        const publicIds = imageMessages.map((msg) => msg.imagePublicId);
+        const deleteResult = await cloudinary.api.delete_resources(publicIds);
+        console.log("Cloudinary bulk delete result:", deleteResult);
+      } catch (cloudinaryError) {
+        console.error("Cloudinary bulk deletion error:", cloudinaryError);
+        // Don't fail the whole operation if Cloudinary deletion fails
+      }
     }
 
     // Bulk soft delete
@@ -117,7 +152,10 @@ export const POST = withAuth(async function (request) {
     return NextResponse.json({
       success: true,
       message: `${deletedMessages.count} messages deleted successfully`,
-      data: { deletedCount: deletedMessages.count },
+      data: {
+        deletedCount: deletedMessages.count,
+        imagesDeleted: imageMessages.length,
+      },
     });
   } catch (error) {
     console.error("Bulk delete messages error:", error);

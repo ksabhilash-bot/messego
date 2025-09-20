@@ -7,7 +7,6 @@
 generator client {
   provider = "prisma-client-js"
   output   = "../app/generated/prisma"
-  
 }
 
 datasource db {
@@ -15,15 +14,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User{
-  id Int @id @default(autoincrement())
-  email String @unique
-  name String
-  password String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  sentMessage Message[] @relation("MessageFromUser")
-  receivedMessage Message[] @relation("MessageToUser")
+model User {
+  id               Int       @id @default(autoincrement())
+  email            String    @unique
+  name             String
+  password         String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  sentMessage      Message[] @relation("MessageFromUser")
+  receivedMessage  Message[] @relation("MessageToUser")
 }
 
 enum MessageType {
@@ -35,7 +34,11 @@ model Message {
   id        Int         @id @default(autoincrement())
   text      String?     // Optional for image messages
   type      MessageType @default(TEXT)
-  imageUrl  String?     // For image messages
+  
+  // Cloudinary image data
+  imageSecureUrl String?  // Cloudinary secure URL
+  imagePublicId  String?  // Cloudinary public ID for deletion
+  
   createdAt DateTime    @default(now())
   
   // Message status
@@ -44,17 +47,18 @@ model Message {
   
   // Soft delete
   deletedAt DateTime?
-
+  
   // Sender
   fromId    Int
   from      User        @relation("MessageFromUser", fields: [fromId], references: [id], onDelete: Cascade)
-
+  
   // Receiver
   toId      Int
   to        User        @relation("MessageToUser", fields: [toId], references: [id], onDelete: Cascade)
-
+  
   // Indexes for performance
   @@index([fromId, toId, deletedAt])
   @@index([toId, isRead])
   @@index([createdAt])
+  @@index([imagePublicId]) // Index for Cloudinary cleanup queries
 }
